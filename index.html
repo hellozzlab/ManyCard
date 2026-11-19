@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Card 响应式模拟</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #ffffff;
+  --surface: #fff;
+  --subtle: #f5f5f5;
+  --ink: #0d0d0d;
+  --muted: #5e5e5e;
+  --line: #ededed;
+  --accent: #161616;
+  --accent-soft: #e9e9e9;
+  --ui-transition-duration: 150ms;
+  --page-gutter: 40px;
+  --canvas-min-width: 440px;
+  --panel-height: max(168px, calc(100dvh - 2 * var(--page-gutter)));
+}
+* { box-sizing: border-box; }
+html { scrollbar-gutter: stable; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 Geist, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+main { max-width: 1596px; margin-inline: auto; padding: var(--page-gutter); }
+button, input { font: inherit; color: inherit; }
+button {
+  min-height: 32px; padding: 4px 10px; border: 0;
+  border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer;
+}
+button:hover { background: var(--subtle); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workspace { display: grid; grid-template-columns: minmax(var(--canvas-min-width), 1fr) 300px; gap: 28px; align-items: start; }
+.preview { min-width: 0; }
+.canvas {
+  display: flex; flex-direction: column;
+  min-width: var(--canvas-min-width); max-width: 1200px; height: var(--panel-height);
+  margin-inline: auto; padding: 40px 40px 20px; background: var(--subtle); border-radius: 16px;
+  overflow: hidden;
+}
+/* The strip scrolls inside the viewport. This wrapper leaves room for its shadow. */
+.stage-scroll { display: flex; flex: 1; min-height: 0; }
+.stage-group { flex: none; margin: auto; }
+.stage { position: relative; }
+.viewport {
+  position: absolute; inset: 0 auto auto 0; transform-origin: top left; background: var(--surface);
+  border-radius: 11px; box-shadow: 0 1px 3px #00000009, 0 8px 24px #0000000c; overflow: hidden;
+}
+.strip {
+  display: flex; align-items: flex-start; gap: var(--gap);
+  max-height: var(--strip-max-height); overflow: auto; padding: 16px var(--right) 16px var(--left);
+  scrollbar-width: none; cursor: grab; user-select: none;
+}
+.strip[data-tiles] {
+  display: grid; grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
+  align-content: flex-start; overflow-x: hidden; cursor: default;
+}
+.strip[data-tiles] .poster { width: 100%; min-width: 0; }
+.mixed-preview {
+  display: grid; grid-template-columns: minmax(0, 1fr); max-height: var(--strip-max-height);
+  overflow: auto; scrollbar-width: none;
+}
+.mixed-preview h2 { margin: 0; padding: 16px var(--left) 0; font-size: 12px; }
+.mixed-preview .strip { max-height: none; }
+.strip::-webkit-scrollbar { display: none; }
+.strip:focus-visible { outline-offset: -2px; }
+.strip[data-dragging] { cursor: grabbing; }
+.poster {
+  width: var(--card); flex: none; aspect-ratio: var(--poster-ratio, 3 / 4); display: grid; place-items: center;
+  border-radius: 7px; background: #6688b8; color: #fff; font-weight: 650;
+}
+.poster:nth-child(3n+2) { background: #829fc7; }
+.poster:nth-child(3n+3) { background: #9db4d4; }
+.metrics {
+  position: relative;
+  display: flex; flex: none; justify-content: center; flex-wrap: wrap; gap: 4px 16px;
+  margin: 20px 0 0; color: var(--muted); font-size: 11px;
+}
+.metrics div { display: flex; align-items: baseline; gap: 5px; }
+.metrics dd { margin: 0; font-variant-numeric: tabular-nums; }
+.control-panel {
+  display: flex; flex-direction: column; min-width: 0; height: var(--panel-height);
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
+}
+.control-panel-header {
+  flex: none; padding: 16px; border-bottom: 1px solid var(--line);
+}
+#restore-defaults, #copy-code { font-size: 12px; }
+#controls {
+  display: grid; align-content: start; gap: 24px; min-height: 0; padding: 16px;
+  overflow: auto;
+}
+.code-panel { display: flex; flex-direction: column; flex: 1; gap: 8px; min-height: 0; padding: 16px; }
+.code-panel textarea {
+  flex: 1; min-height: 0; width: 100%; padding: 10px; border: 0; border-radius: 8px;
+  background: var(--subtle); color: var(--ink); font: 11px/1.55 ui-monospace, monospace; resize: none;
+}
+.code-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#copy-status {
+  color: var(--muted); font-size: 11px; opacity: 0;
+  transition: opacity var(--ui-transition-duration) ease-in-out;
+}
+#copy-status[data-visible] { opacity: 1; }
+#copy-code { background: var(--subtle); white-space: nowrap; }
+#copy-code:hover { background: var(--accent-soft); }
+.controls-actions { display: flex; justify-content: flex-start; }
+#restore-defaults { background: var(--subtle); }
+#restore-defaults:hover { background: var(--accent-soft); }
+.group { min-width: 0; }
+.group h2 { margin: 0 0 9px; font-size: 12px; font-weight: 650; }
+.fields label { color: var(--muted); font-size: 12px; }
+#width {
+  --track-fill: linear-gradient(to right, var(--accent) var(--width-progress, 0%), transparent var(--width-progress, 0%));
+  --track-hover-duration: 140ms;
+  appearance: none; display: block; width: 100%; min-width: 0; height: 18px;
+  margin: 5px 0 7px; border: 0; background: transparent; cursor: ew-resize;
+}
+#width::-webkit-slider-runnable-track {
+  height: 4px; border: 0; border-radius: 999px;
+  background: var(--subtle) var(--track-fill);
+  transition: background-color var(--track-hover-duration) ease;
+}
+#width::-moz-range-track {
+  height: 4px; border: 0; border-radius: 999px;
+  background: var(--subtle) var(--track-fill);
+  transition: background-color var(--track-hover-duration) ease;
+}
+#width:hover::-webkit-slider-runnable-track { background-color: var(--accent-soft); }
+#width:hover::-moz-range-track { background-color: var(--accent-soft); }
+#width::-webkit-slider-thumb {
+  appearance: none; width: 14px; height: 14px; margin-top: -5px;
+  border: 0; border-radius: 50%; background: var(--accent);
+}
+#width::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--accent); }
+.presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.presets button {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 2px 8px;
+  border-radius: 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+  transition: background-color var(--ui-transition-duration) ease, color var(--ui-transition-duration) ease;
+}
+.presets button[aria-pressed=true] {
+  background: var(--subtle); color: var(--ink);
+}
+.fields { display: grid; gap: 8px; }
+.fields label { display: grid; grid-template-columns: minmax(0,1fr) minmax(62px, 42%); align-items: center; gap: 12px; }
+.unit-field {
+  display: flex; align-items: center; width: 100%; min-height: 34px; padding-right: 8px;
+  border: 2px solid transparent; border-radius: 8px; background: var(--subtle);
+  transition: border-color var(--ui-transition-duration) ease;
+}
+.unit-field:hover, .unit-field:focus-within { border-color: var(--ink); }
+.unit-field:focus-within { background: var(--surface); }
+.unit-field input {
+  width: 100%; min-width: 0; padding: 6px 8px; border: 0; background: transparent;
+  color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.unit-field input[type=number] { appearance: textfield; }
+.unit-field input::-webkit-inner-spin-button, .unit-field input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.unit-field input:focus { outline: none; }
+.presets .current-width { width: auto; height: 28px; min-height: 28px; padding: 0; }
+.presets:has(button[aria-pressed=true]) .current-width:not(:focus-within) { background: transparent; }
+.current-width input { width: calc(var(--width-digits, 3) * 1ch + 12px); padding: 2px 6px; }
+.segment {
+  --segment-columns: 2;
+  --segment-index: 0;
+  --segment-padding: 3px;
+  --segment-gap: 2px;
+  position: relative; display: inline-grid; grid-template-columns: repeat(var(--segment-columns), minmax(0, 1fr));
+  gap: var(--segment-gap); padding: var(--segment-padding);
+  border-radius: 9px; background: var(--subtle);
+}
+.segment::before {
+  content: ""; position: absolute; inset: var(--segment-padding) auto var(--segment-padding) var(--segment-padding);
+  width: calc((100% - 2 * var(--segment-padding) - (var(--segment-columns) - 1) * var(--segment-gap)) / var(--segment-columns));
+  border-radius: 6px; background: var(--surface); box-shadow: 0 1px 4px #00000012;
+  transform: translateX(calc(var(--segment-index) * (100% + var(--segment-gap))));
+  pointer-events: none; transition: transform var(--ui-transition-duration) ease;
+}
+.segment:has(> button:nth-child(2)[aria-pressed=true], > label:nth-child(2) input:checked) {
+  --segment-index: 1;
+}
+.segment--content { display: inline-flex; width: max-content; max-width: 100%; flex-wrap: wrap; }
+.segment--content::before { content: none; }
+.segment--content input:checked + span {
+  background: var(--surface); box-shadow: 0 1px 4px #00000012;
+}
+.segment > * { position: relative; }
+.segment label { cursor: pointer; }
+.segment input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: pointer; }
+.segment span, .segment button {
+  display: block; min-height: 0; padding: 4px 12px; border-radius: 6px; text-align: center;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 400;
+  transition: color var(--ui-transition-duration) ease;
+}
+.segment input:checked + span, .segment button[aria-pressed=true] { color: var(--accent); }
+.segment input:focus-visible + span { outline: 2px solid var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  #width { --track-hover-duration: 0ms; }
+  .unit-field, #copy-status, .presets button,
+  .segment::before, .segment span, .segment button { transition: none; }
+}
+</style>
+<main>
+
+<div class="workspace">
+<section class="preview" aria-label="容器预览">
+  <div class="canvas" id="canvas"><div class="stage-scroll" id="stage-scroll"><div class="stage-group" id="stage-group">
+    <div class="stage" id="stage">
+    <div class="viewport" id="viewport">
+      <div class="mixed-preview" id="mixed-preview" tabindex="0" role="region" aria-label="混排预览" hidden></div>
+      <div class="strip" id="strip" tabindex="0" role="region" aria-label="可横向滑动的 Card 列表">
+        <div class="poster">1</div>
+        <div class="poster">2</div>
+        <div class="poster">3</div>
+        <div class="poster">4</div>
+        <div class="poster">5</div>
+        <div class="poster">6</div>
+        <div class="poster">7</div>
+        <div class="poster">8</div>
+        <div class="poster">9</div>
+        <div class="poster">10</div>
+        <div class="poster">11</div>
+        <div class="poster">12</div>
+      </div>
+    </div></div>
+  </div></div>
+    <dl class="metrics">
+      <div><dt>总宽度</dt><dd id="container-width"></dd></div>
+      <div data-single-metric><dt id="visibility-label">完整 Card</dt><dd id="visibility"></dd></div>
+      <div data-single-metric><dt>Card 宽度</dt><dd id="card-value"></dd></div>
+      <div id="peek-metric"><dt>初始露出</dt><dd id="peek-value"></dd></div>
+    </dl>
+  </div>
+
+</section>
+<aside class="control-panel" aria-label="模拟器面板">
+<header class="control-panel-header">
+  <div class="segment" role="group" aria-label="面板视图">
+    <button type="button" id="show-controls" aria-controls="controls" aria-pressed="true">控制</button>
+    <button type="button" id="show-code" aria-controls="code-panel" aria-pressed="false">代码</button>
+  </div>
+</header>
+<form id="controls" aria-label="模拟器配置">
+  <div class="controls-actions"><button id="restore-defaults" type="button">恢复默认</button></div>
+  <section class="group" aria-labelledby="layout-title">
+    <h2 id="layout-title">布局</h2>
+    <div class="segment segment--content" role="radiogroup" aria-labelledby="layout-title">
+      <label><input type="radio" name="mode" value="tiles" checked><span>平铺</span></label>
+      <label><input type="radio" name="mode" value="scroll"><span>横滑</span></label>
+      <label><input type="radio" name="mode" value="mixed"><span>混排</span></label>
+    </div>
+  </section>
+  <section class="group" id="poster-ratio-controls" aria-labelledby="poster-ratio-title">
+    <h2 id="poster-ratio-title">海报比例</h2>
+    <div class="segment segment--content" role="radiogroup" aria-labelledby="poster-ratio-title">
+      <label><input type="radio" name="poster-ratio" value="portrait-small" checked><span>3:4 竖版小</span></label>
+      <label><input type="radio" name="poster-ratio" value="portrait-large"><span>3:4 竖版大</span></label>
+      <label><input type="radio" name="poster-ratio" value="landscape"><span>16:9 横版</span></label>
+    </div>
+  </section>
+  <section class="group" aria-labelledby="container-title">
+    <h2 id="container-title">容器宽度</h2>
+    <input id="width" type="range" min="360" max="1120" step="1" value="360" aria-labelledby="container-title">
+    <div class="presets" id="presets" role="group" aria-label="容器宽度输入和快捷选项">
+      <span class="unit-field current-width">
+        <input id="width-value" type="number" min="360" max="1120" step="1" value="360" aria-label="当前容器宽度（px）">
+      </span>
+      <button type="button" data-width="360">360</button><button type="button" data-width="375">375</button>
+      <button type="button" data-width="640">640</button>
+      <button type="button" data-width="768">768</button>
+      <button type="button" data-width="1024">1024</button>
+    </div>
+  </section>
+  <section class="group" id="card-size-controls" aria-labelledby="size-title">
+    <h2 id="size-title">Card 尺寸</h2>
+    <div class="fields" id="standard-card-fields">
+      <label>小屏最小宽度（&lt;640 px）<span class="unit-field"><input id="small-min-card" type="number" min="1" max="1200" value="100"><span aria-hidden="true">px</span></span></label>
+      <label>小屏最大宽度（&lt;640 px）<span class="unit-field"><input id="small-max-card" type="number" min="1" max="1200" value="170"><span aria-hidden="true">px</span></span></label>
+      <label>宽屏最小宽度（≥640 px）<span class="unit-field"><input id="wide-min-card" type="number" min="1" max="1200" value="140"><span aria-hidden="true">px</span></span></label>
+      <label>宽屏最大宽度（≥640 px）<span class="unit-field"><input id="wide-max-card" type="number" min="1" max="1200" value="170"><span aria-hidden="true">px</span></span></label>
+    </div>
+    <div class="fields" id="large-card-fields" hidden>
+      <label>小屏最小宽度（&lt;640 px）<span class="unit-field"><input id="large-small-min-card" type="number" min="1" max="1200" value="150"><span aria-hidden="true">px</span></span></label>
+      <label>小屏最大宽度（&lt;640 px）<span class="unit-field"><input id="large-small-max-card" type="number" min="1" max="1200" value="200"><span aria-hidden="true">px</span></span></label>
+      <label>宽屏最小宽度（≥640 px）<span class="unit-field"><input id="large-wide-min-card" type="number" min="1" max="1200" value="175"><span aria-hidden="true">px</span></span></label>
+      <label>宽屏最大宽度（≥640 px）<span class="unit-field"><input id="large-wide-max-card" type="number" min="1" max="1200" value="200"><span aria-hidden="true">px</span></span></label>
+    </div>
+  </section>
+  <section class="group" aria-labelledby="spacing-title">
+    <h2 id="spacing-title">间距</h2>
+    <div class="fields">
+      <label>左 Padding<span class="unit-field"><input id="left" type="number" min="0" max="1200" value="16"><span aria-hidden="true">px</span></span></label>
+      <label>右 Padding<span class="unit-field"><input id="right" type="number" min="0" max="1200" value="16"><span aria-hidden="true">px</span></span></label>
+      <label>Card Gap<span class="unit-field"><input id="gap" type="number" min="0" max="1200" value="8"><span aria-hidden="true">px</span></span></label>
+      <label data-peek>小屏露出（&lt;640 px）<span class="unit-field"><input id="peek-small" type="number" min="0" max="1200" value="12"><span aria-hidden="true">px</span></span></label>
+      <label data-peek>宽屏露出（≥640 px）<span class="unit-field"><input id="peek-wide" type="number" min="0" max="1200" value="24"><span aria-hidden="true">px</span></span></label>
+    </div>
+  </section>
+</form>
+<div class="code-panel" id="code-panel" hidden>
+  <div class="code-actions">
+    <button type="button" id="copy-code">复制代码</button>
+    <span id="copy-status" role="status"></span>
+  </div>
+  <textarea id="layout-code" aria-label="Card 布局 JavaScript" readonly wrap="off" spellcheck="false"></textarea>
+</div>
+</aside>
+</div>
+</main>
+<script>
+const element = id => document.getElementById(id);
+const controls = element('controls');
+const width = element('width');
+const stage = element('stage');
+const stageGroup = element('stage-group');
+const canvas = element('canvas');
+const stageScroll = element('stage-scroll');
+const viewport = element('viewport');
+const strip = element('strip');
+const mixedPreview = element('mixed-preview');
+const scrollPosterCount = strip.children.length;
+const posterRatio = controls.elements.namedItem('poster-ratio');
+const mode = controls.elements.namedItem('mode');
+const spacing = ['left', 'right', 'gap'].map(element);
+const peekSmall = element('peek-small');
+const peekWide = element('peek-wide');
+const peekFields = controls.querySelectorAll('[data-peek]');
+const number = input => clamp(
+  Number.isFinite(input.valueAsNumber) ? Math.round(input.valueAsNumber) : Number(input.defaultValue),
+  Number(input.min), Number(input.max)
+);
+const smallCardInputs = [element('small-min-card'), element('small-max-card')];
+const wideCardInputs = [element('wide-min-card'), element('wide-max-card')];
+const largeSmallCardInputs = [element('large-small-min-card'), element('large-small-max-card')];
+const largeWideCardInputs = [element('large-wide-min-card'), element('large-wide-max-card')];
+const standardCardFields = element('standard-card-fields');
+const largeCardFields = element('large-card-fields');
+const presets = Array.from(element('presets').querySelectorAll('button'));
+const currentWidth = element('width-value');
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+let scale = 1;
+let previousLayout;
+let previousContainer;
+let widthAnimation;
+let selectedPreset = null;
+let previousVisibleCount;
+let previousTiles;
+let stageAnimation;
+const enteringCards = new Map();
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const switchTiming = {duration: 150, easing: 'ease-out'};
+
+function calculateLayout(available, gap, minCard, maxCard, peek, tiles) {
+  // A tiled row ends at the last Card. A scrolling row also reserves the next gap.
+  const budget = available + (tiles ? gap : -peek);
+  const preferred = Math.max(1, Math.floor(budget / (minCard + gap)));
+  const usable = count => budget / count - gap;
+  const deviation = card => Math.max(minCard - card, card - maxCard, 0);
+  const candidateLimit = Math.max(preferred, Math.ceil(budget / (minCard + gap)));
+  const candidates = Array.from({length: candidateLimit},
+    (_, index) => ({count: index + 1, card: usable(index + 1)}))
+    .filter(({card}) => card > 0 && (tiles || peek === 0 || card > peek));
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => deviation(a.card) - deviation(b.card) ||
+    Math.abs(a.count - preferred) - Math.abs(b.count - preferred));
+  return candidates[0];
+}
+
+function computeCardLayout(container, {
+  smallCard, wideCard, left, right, gap, smallPeek, widePeek, tiles, total
+}) {
+  if (!tiles && total === 0) return {count: 0, card: 0, showPeek: false, peek: 0, posterCount: 0};
+
+  const wide = container >= 640;
+  const [minCard, preferredMaxCard] = wide ? wideCard : smallCard;
+  const maxCard = Math.max(minCard, preferredMaxCard);
+  const requestedPeek = wide ? widePeek : smallPeek;
+  const innerWidth = Math.max(0, container - left - right);
+  const overflowWidth = Math.max(0, container - left);
+  const fitted = calculateLayout(innerWidth, gap, minCard, maxCard, 0, true);
+  let peek = 0;
+  let layout;
+  if (!tiles) {
+    const withPeek = calculateLayout(overflowWidth, gap, minCard, maxCard, requestedPeek, false);
+    if (withPeek && total > withPeek.count) {
+      // The clip is the viewport edge. Right padding belongs to the scrollable content.
+      layout = withPeek;
+      peek = requestedPeek;
+    } else if (fitted && total <= fitted.count) {
+      // All Cards fit within both paddings. Avoid oversizing rows with fewer Cards.
+      const card = total === fitted.count ? fitted.card : Math.min(
+        maxCard, (innerWidth - (total - 1) * gap) / total
+      );
+      layout = {count: total, card};
+    } else {
+      // Fall back to a viewport-edge boundary even if all Cards are visible there.
+      layout = requestedPeek === 0 ? withPeek
+        : calculateLayout(overflowWidth, gap, minCard, maxCard, 0, false);
+    }
+  }
+
+  layout ??= fitted ?? {count: 0, card: 0};
+  const count = tiles ? layout.count : Math.min(layout.count, total);
+  return {count, card: layout.card, showPeek: peek > 0, peek, posterCount: tiles ? count * 2 : total};
+}
+
+function animateSwitch(target) {
+  return target.animate(
+    [{opacity: 0.72, transform: 'translateY(3px)'}, {opacity: 1, transform: 'translateY(0)'}],
+    switchTiming
+  );
+}
+
+function animateStageWidth(from) {
+  widthAnimation?.cancel();
+  const to = stage.getBoundingClientRect();
+  if (!from.width || !from.height || !to.width || !to.height) return;
+  const dx = from.left - to.left;
+  const dy = from.top - to.top;
+  const scaleX = from.width / to.width;
+  const scaleY = from.height / to.height;
+  widthAnimation = stage.animate([
+    {transformOrigin: 'top left', transform: 'translate(' + dx + 'px, ' + dy + 'px) scale(' + scaleX + ', ' + scaleY + ')'},
+    {transformOrigin: 'top left', transform: 'none'}
+  ], switchTiming);
+}
+
+function animateCardCount(visibleCount, showPeek, tiles, rightEdge, leftPadding, stride) {
+  const enteringLimit = visibleCount + (showPeek ? 1 : 0);
+  for (const [index, animation] of enteringCards) {
+    if (animation.playState === 'finished' || animation.playState === 'idle') {
+      enteringCards.delete(index);
+    } else if (tiles || index >= enteringLimit || reducedMotion.matches) {
+      animation.cancel();
+      enteringCards.delete(index);
+    }
+  }
+
+  if (!reducedMotion.matches && previousTiles !== undefined && tiles !== previousTiles) {
+    stageAnimation?.cancel();
+    stageAnimation = animateSwitch(stageGroup);
+  } else if (!reducedMotion.matches && tiles === previousTiles && previousVisibleCount !== visibleCount) {
+    if (!tiles && visibleCount > previousVisibleCount) {
+      const distance = Math.max(0, rightEdge - leftPadding - previousVisibleCount * stride);
+      for (let index = previousVisibleCount; index < enteringLimit; index++) {
+        enteringCards.get(index)?.cancel();
+        const animation = strip.children[index].animate(
+          [{transform: 'translateX(' + distance + 'px)'}, {transform: 'translateX(0)'}],
+          {duration: 500, easing: 'ease-out'}
+        );
+        enteringCards.set(index, animation);
+      }
+    } else if (tiles && stageAnimation?.playState !== 'running') {
+      stageAnimation = stageGroup.animate(
+        [{opacity: 0.85, transform: 'translateY(3px)'}, {opacity: 1, transform: 'translateY(0)'}],
+        {duration: 240, easing: 'cubic-bezier(0.2, 0.65, 0.3, 1)'}
+      );
+    }
+  }
+
+  previousVisibleCount = visibleCount;
+  previousTiles = tiles;
+}
+
+function layoutSettings(tiles, ratio) {
+  const [left, right, gap] = spacing.map(number);
+  const smallPortrait = ratio === 'portrait-small';
+  return {
+    smallCard: (smallPortrait ? smallCardInputs : largeSmallCardInputs).map(number),
+    wideCard: (smallPortrait && tiles ? wideCardInputs : largeWideCardInputs).map(number),
+    left, right, gap,
+    smallPeek: number(peekSmall), widePeek: number(peekWide), tiles, total: scrollPosterCount
+  };
+}
+
+function renderStrip(list, container, settings, ratio) {
+  const {tiles} = settings;
+  const {count, card, showPeek, peek, posterCount} = computeCardLayout(container, settings);
+  while (list.children.length > posterCount) list.lastElementChild.remove();
+  while (list.children.length < posterCount) {
+    const poster = document.createElement('div');
+    poster.className = 'poster';
+    poster.textContent = list.children.length + 1;
+    list.append(poster);
+  }
+  list.style.setProperty('--card', card + 'px');
+  list.style.setProperty('--columns', Math.max(1, count));
+  list.style.setProperty('--poster-ratio', ratio === 'landscape' ? '16 / 9' : '3 / 4');
+  list.toggleAttribute('data-tiles', tiles);
+  list.hidden = card <= 0;
+  return {count, card, showPeek, peek};
+}
+
+const mixedExamples = [
+  {label: '平铺 · 3:4 竖版小', ratio: 'portrait-small', tiles: true},
+  {label: '平铺 · 3:4 竖版大', ratio: 'portrait-large', tiles: true},
+  {label: '平铺 · 16:9 横版', ratio: 'landscape', tiles: true},
+  {label: '横滑 · 3:4 竖版小', ratio: 'portrait-small', tiles: false},
+  {label: '横滑 · 3:4 竖版大', ratio: 'portrait-large', tiles: false},
+  {label: '横滑 · 16:9 横版', ratio: 'landscape', tiles: false}
+];
+
+function renderMixed(container) {
+  if (!mixedPreview.children.length) {
+    for (const {label, tiles} of mixedExamples) {
+      const section = document.createElement('section');
+      const heading = document.createElement('h2');
+      heading.textContent = label;
+      const list = document.createElement('div');
+      list.className = 'strip';
+      if (!tiles) {
+        list.tabIndex = 0;
+        list.setAttribute('role', 'region');
+        list.setAttribute('aria-label', label);
+        enableScrollDrag(list);
+      }
+      section.append(heading, list);
+      mixedPreview.append(section);
+    }
+  }
+  return mixedExamples.map(({label, ratio, tiles}, index) => {
+    const settings = layoutSettings(tiles, ratio);
+    renderStrip(mixedPreview.children[index].lastElementChild, container, settings, ratio);
+    return {label, ratio, settings};
+  });
+}
+
+function render() {
+  const canvasStyle = getComputedStyle(canvas);
+  const horizontalPadding = parseFloat(canvasStyle.paddingLeft) + parseFloat(canvasStyle.paddingRight);
+  const maxContainerWidth = Math.floor(parseFloat(canvasStyle.maxWidth) - horizontalPadding);
+  if (Number(width.max) !== maxContainerWidth) width.max = maxContainerWidth;
+  if (currentWidth.max !== width.max) currentWidth.max = width.max;
+  const container = width.valueAsNumber;
+  const from = !reducedMotion.matches && previousContainer !== undefined && previousContainer !== container
+    ? stage.getBoundingClientRect() : null;
+  previousContainer = container;
+  const mixed = mode.value === 'mixed';
+  const tiles = mode.value === 'tiles';
+  const ratio = posterRatio.value;
+  const smallPortrait = ratio === 'portrait-small';
+  standardCardFields.hidden = !smallPortrait;
+  largeCardFields.hidden = smallPortrait && tiles;
+  for (const input of wideCardInputs) input.closest('label').hidden = !tiles;
+  for (const input of largeSmallCardInputs) input.closest('label').hidden = smallPortrait;
+  element('poster-ratio-controls').hidden = mixed;
+  element('card-size-controls').hidden = mixed;
+  const settings = layoutSettings(tiles, ratio);
+  const {left, right, gap} = settings;
+  const canvasInnerWidth = stageScroll.clientWidth;
+  scale = clamp(canvasInnerWidth / container, 0, 1);
+
+  viewport.style.width = container + 'px';
+  viewport.style.transform = 'scale(' + scale + ')';
+  viewport.style.setProperty('--gap', gap + 'px');
+  viewport.style.setProperty('--left', Math.min(left, container) + 'px');
+  viewport.style.setProperty('--right', Math.min(right, Math.max(0, container - left)) + 'px');
+  for (const field of peekFields) field.hidden = tiles;
+  element('peek-metric').hidden = tiles || mixed;
+  for (const metric of document.querySelectorAll('[data-single-metric]')) metric.hidden = mixed;
+  stageGroup.style.width = container * scale + 'px';
+  element('container-width').textContent = container + ' px';
+  const stripMaxHeight = scale > 0 ? Math.floor(stageScroll.clientHeight / scale) : 0;
+  viewport.style.setProperty('--strip-max-height', stripMaxHeight + 'px');
+  mixedPreview.hidden = !mixed;
+  let examples;
+  if (mixed) {
+    strip.hidden = true;
+    if (previousLayout !== 'mixed') mixedPreview.scrollTo(0, 0);
+    previousLayout = 'mixed';
+    previousTiles = undefined;
+    examples = renderMixed(container);
+  } else {
+    const {count, card, showPeek, peek} = renderStrip(strip, container, settings, ratio);
+    strip.setAttribute('aria-label', tiles ? '可纵向滚动的平铺 Card 列表' : '可横向滑动的 Card 列表');
+    element('card-value').textContent = card.toFixed(1) + ' px';
+    element('visibility-label').textContent = tiles ? '每排 Card' : '完整 Card';
+    element('visibility').textContent = count;
+    element('peek-value').textContent = showPeek ? peek + ' px' : '—';
+    const layout = [container, card, left, right, gap, peek, tiles, ratio].join('/');
+    if (previousLayout !== layout) strip.scrollTo(0, 0);
+    previousLayout = layout;
+    animateCardCount(count, showPeek, tiles, container, Math.min(left, container), card + gap);
+  }
+  stage.style.height = viewport.offsetHeight * scale + 'px';
+  if (from) animateStageWidth(from);
+  if (currentWidth.value !== width.value) currentWidth.value = width.value;
+  currentWidth.style.setProperty('--width-digits', currentWidth.value.length);
+  const minContainerWidth = Number(width.min);
+  const progress = (container - minContainerWidth) / (maxContainerWidth - minContainerWidth);
+  width.style.setProperty('--width-progress', (progress * 100) + '%');
+  for (const button of presets) button.setAttribute('aria-pressed', button === selectedPreset);
+  if (!codePanel.hidden) updateCode(container, settings, examples);
+}
+
+const codePanel = element('code-panel');
+const layoutCode = element('layout-code');
+const copyStatus = element('copy-status');
+const showControls = element('show-controls');
+const showCode = element('show-code');
+let copyStatusTimer;
+let panelAnimation;
+
+function updateCode(container, settings, examples) {
+  layoutCode.value = [
+    '// Pass your actual container width (CSS px), not the window width.',
+    '// Set total to the number of Cards in horizontal mode. Width limits are preferred bounds.',
+    '// Use [min, max] for each Card width range. The wide range starts at 640 CSS px.',
+    '// count = complete Cards (per row for tiles); card = base Card width.',
+    '// peek = actual visible width at scroll start, or 0 when none.',
+    '// Horizontal layout: scroll the full viewport and keep right padding at the content end.',
+    '// Tile layout: use a grid with count columns and generate posterCount Cards for two full rows.',
+    calculateLayout.toString(),
+    computeCardLayout.toString(),
+    '// Example using the current simulator settings. Recompute on ResizeObserver updates:',
+    ...(examples ? [
+      'const examples = ' + JSON.stringify(examples, null, 2) + ';',
+      'const layouts = examples.map(example => ({ ...example, ...computeCardLayout(' + container + ', example.settings) }));'
+    ] : [
+      'const settings = ' + JSON.stringify(settings, null, 2) + ';',
+      'const layout = computeCardLayout(' + container + ', settings);'
+    ])
+  ].join('\n\n');
+}
+
+function switchPanel(showingCode) {
+  if (codePanel.hidden === !showingCode) return;
+  controls.hidden = showingCode;
+  codePanel.hidden = !showingCode;
+  showControls.setAttribute('aria-pressed', !showingCode);
+  showCode.setAttribute('aria-pressed', showingCode);
+  clearTimeout(copyStatusTimer);
+  copyStatus.removeAttribute('data-visible');
+  copyStatus.textContent = '';
+  if (showingCode) render();
+  panelAnimation?.cancel();
+  if (!reducedMotion.matches) panelAnimation = animateSwitch(showingCode ? codePanel : controls);
+}
+
+function showCopyStatus(copied) {
+  if (codePanel.hidden) return;
+  clearTimeout(copyStatusTimer);
+  copyStatus.textContent = copied ? '已复制' : '代码已选中，可手动复制';
+  copyStatus.setAttribute('data-visible', '');
+  if (copied) {
+    copyStatusTimer = setTimeout(() => copyStatus.removeAttribute('data-visible'), 2000);
+  }
+}
+
+showControls.addEventListener('click', () => switchPanel(false));
+showCode.addEventListener('click', () => switchPanel(true));
+element('copy-code').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(layoutCode.value);
+    showCopyStatus(true);
+  } catch {
+    layoutCode.focus();
+    layoutCode.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch { /* Manual selection is ready. */ }
+    showCopyStatus(copied);
+  }
+});
+
+controls.addEventListener('submit', event => event.preventDefault());
+controls.addEventListener('input', event => {
+  if (event.target === currentWidth) {
+    currentWidth.style.setProperty('--width-digits', Math.max(1, currentWidth.value.length));
+    if (!Number.isFinite(currentWidth.valueAsNumber) || !currentWidth.validity.valid) return;
+    width.value = currentWidth.value;
+    selectedPreset = null;
+  }
+  if (event.target === width) selectedPreset = null;
+  render();
+});
+function commitCurrentWidth() {
+  if (Number.isFinite(currentWidth.valueAsNumber)) {
+    width.value = number(currentWidth);
+    selectedPreset = null;
+  }
+  render();
+}
+currentWidth.addEventListener('blur', () => {
+  if (currentWidth.value !== width.value) commitCurrentWidth();
+});
+currentWidth.addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  commitCurrentWidth();
+});
+controls.addEventListener('change', event => {
+  const input = event.target;
+  const cardInputs = [smallCardInputs, wideCardInputs, largeSmallCardInputs, largeWideCardInputs]
+    .find(inputs => inputs.includes(input));
+  if (!cardInputs && ![...spacing, peekSmall, peekWide].includes(input)) return;
+  input.value = number(input);
+  if (cardInputs) {
+    const [min, max] = cardInputs;
+    if (number(min) > number(max)) {
+      const other = input === max ? min : max;
+      other.value = input.value;
+    }
+  }
+  render();
+});
+for (const button of presets) {
+  button.addEventListener('click', () => {
+    selectedPreset = button;
+    width.value = button.dataset.width;
+    render();
+  });
+}
+element('restore-defaults').addEventListener('click', () => {
+  controls.reset();
+  selectedPreset = null;
+  strip.scrollTo(0, 0);
+  render();
+});
+
+function enableScrollDrag(list) {
+  let scrollDrag;
+  list.addEventListener('pointerdown', event => {
+    if (list.hasAttribute('data-tiles') || event.pointerType !== 'mouse' || event.button !== 0 ||
+        event.clientY >= list.getBoundingClientRect().top + list.clientHeight * scale) return;
+    scrollDrag = {id: event.pointerId, x: event.clientX, left: list.scrollLeft};
+    list.setPointerCapture(event.pointerId);
+    list.setAttribute('data-dragging', '');
+  });
+  list.addEventListener('pointermove', event => {
+    if (event.pointerId !== scrollDrag?.id) return;
+    list.scrollLeft = scrollDrag.left + (scrollDrag.x - event.clientX) / scale;
+  });
+  list.addEventListener('lostpointercapture', () => {
+    scrollDrag = undefined;
+    list.removeAttribute('data-dragging');
+  });
+}
+
+enableScrollDrag(strip);
+new ResizeObserver(render).observe(canvas);
+render();
+</script>
+</html>
